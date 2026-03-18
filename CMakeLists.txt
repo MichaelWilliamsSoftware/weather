@@ -3,6 +3,12 @@ project(weather)
 
 set(CMAKE_C_STANDARD 99)
 
+find_package(CURL REQUIRED)
+
 add_executable(weather
     src/main.c
+)
+
+target_link_libraries(weather
+    CURL::libcurl
 )
