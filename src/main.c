@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
+#include <cjson/cJSON.h>
 
 /*https://curl.se/libcurl/c/CURLOPT_WRITEFUNCTION.html*/
 typedef struct {
@@ -55,6 +56,35 @@ int main(void)
         return 1;
     }
     printf("Raw JSON response:\n%s\n", chunk.response);
+    cJSON *json = cJSON_Parse(chunk.response);
+    if(!json) {
+        fprintf(stderr, "Failed\n");
+        curl_easy_cleanup(curl);
+        free(chunk.response);
+        return 1;
+    }
+    cJSON *current_weather = cJSON_GetObjectItemCaseSensitive(json, "current_weather");
+    if(current_weather) {
+        cJSON *temp = cJSON_GetObjectItemCaseSensitive(current_weather, "temperature");
+        cJSON *windspeed = cJSON_GetObjectItemCaseSensitive(current_weather, "windspeed");
+        cJSON *winddir = cJSON_GetObjectItemCaseSensitive(current_weather, "winddirection");
+        cJSON *weathercode = cJSON_GetObjectItemCaseSensitive(current_weather, "weathercode");
+        cJSON *time = cJSON_GetObjectItemCaseSensitive(current_weather, "time");
+        printf("Boston Current Weather:\n");
+        if(time && cJSON_IsString(time))
+            printf("Time: %s\n", time->valuestring);
+        if(temp && cJSON_IsNumber(temp))
+            printf("Temperature: %.2f\n", temp->valuedouble);
+        if(windspeed && cJSON_IsNumber(windspeed))
+            printf("Wind Speed: %.2f\n", windspeed->valuedouble);
+        if(winddir && cJSON_IsNumber(winddir))
+            printf("Wind Direction: %.2f\n", winddir->valuedouble);
+        if(weathercode && cJSON_IsNumber(weathercode))
+            printf("Weather Code: %d\n", weathercode->valueint);
+    } else {
+        printf("current_weather field not found\n");
+    }
+    cJSON_Delete(json);
     curl_easy_cleanup(curl);
     curl_global_cleanup();
     free(chunk.response);
