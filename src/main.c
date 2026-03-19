@@ -55,5 +55,8 @@ int main(void)
         return 1;
     }
     printf("Raw JSON response:\n%s\n", chunk.response);
+    curl_easy_cleanup(curl);
+    curl_global_cleanup();
+    free(chunk.response);
     return 0;
 }
