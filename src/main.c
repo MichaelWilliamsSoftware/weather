@@ -3,6 +3,7 @@
 #include <string.h>
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
+#include <sqlite3.h>
 
 /*https://curl.se/libcurl/c/CURLOPT_WRITEFUNCTION.html*/
 typedef struct {
@@ -81,6 +82,51 @@ int main(void)
             printf("Wind Direction: %.2f\n", winddir->valuedouble);
         if(weathercode && cJSON_IsNumber(weathercode))
             printf("Weather Code: %d\n", weathercode->valueint);
+        sqlite3 *db;
+        if (sqlite3_open("weather.db", &db)) {
+            fprintf(stderr, "Can't open DB: %s\n", sqlite3_errmsg(db));
+            return 1;
+        }
+        const char *create_sql =
+            "CREATE TABLE IF NOT EXISTS weather ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "time TEXT,"
+            "temperature REAL,"
+            "windspeed REAL,"
+            "winddirection REAL,"
+            "weathercode INTEGER);";
+        char *err_msg = NULL;
+        if (sqlite3_exec(db, create_sql, 0, 0, &err_msg) != SQLITE_OK) {
+            fprintf(stderr, "SQL error: %s\n", err_msg);
+            sqlite3_free(err_msg);
+        }
+        const char *insert_sql =
+            "INSERT INTO weather (time, temperature, windspeed, winddirection, weathercode) "
+            "VALUES (?, ?, ?, ?, ?);";
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, insert_sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, time->valuestring, -1, SQLITE_STATIC);
+            sqlite3_bind_double(stmt, 2, temp->valuedouble);
+            sqlite3_bind_double(stmt, 3, windspeed->valuedouble);
+            sqlite3_bind_double(stmt, 4, winddir->valuedouble);
+            sqlite3_bind_int(stmt, 5, weathercode->valueint);
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                fprintf(stderr, "Insert failed\n");
+            }
+        }
+        sqlite3_finalize(stmt);
+        const char *select_sql =
+            "SELECT time, temperature FROM weather ORDER BY id DESC LIMIT 5;";
+        if (sqlite3_prepare_v2(db, select_sql, -1, &stmt, NULL) == SQLITE_OK) {
+            printf("\nLast 5 records:\n");
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                printf("Time: %s | Temp: %.2f\n",
+                   sqlite3_column_text(stmt, 0),
+                   sqlite3_column_double(stmt, 1));
+            }
+        }
+        sqlite3_finalize(stmt);
+        sqlite3_close(db);
     } else {
         printf("current_weather field not found\n");
     }
