@@ -9,6 +9,7 @@ find_package(SQLite3 REQUIRED)
 
 add_executable(weather
     src/main.c
+    src/mem_alloc.c
 )
 
 target_link_libraries(weather
