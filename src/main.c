@@ -14,32 +14,42 @@ static bool use_custom_alloc = false;
 
 void* mws_malloc(size_t size)
 {
-    return use_custom_alloc ? mem_alloc(size) : malloc(size);
+    if (use_custom_alloc) {
+        void *ptr = mem_alloc(size);
+        printf("Malloc addr %p size: %zu bytes\n", ptr, size);
+        return ptr;
+    } else {
+        return malloc(size);
+    }
 }
 
 void mws_free(void *ptr)
 {
-    if (use_custom_alloc)
+    if (use_custom_alloc) {
+        printf("Free %p\n", ptr);
         mem_free(ptr);
-    else
+    } else {
         free(ptr);
+    }
 }
 
 void* mws_realloc(void *ptr, size_t size)
 {
+    printf("Realloc addr %p size: %zu bytes\n", ptr, size);
     if (use_custom_alloc) {
         if (!ptr) {
             return mws_malloc(size);
         }
         if (size == 0) {
-            mem_free(ptr);
+            mws_free(ptr);
             return NULL;
         }
         void *new_ptr = mws_malloc(size);
         if (!new_ptr) {
             return NULL;
         }
-        mem_free(ptr);
+        memcpy(new_ptr, ptr, size);
+        mws_free(ptr);
         return new_ptr;
     } else {
         return realloc(ptr, size);
@@ -47,6 +57,7 @@ void* mws_realloc(void *ptr, size_t size)
 }
 
 void* mws_calloc(size_t nmemb, size_t size) {
+    printf("Calloc nmemb %zu size: %zu bytes\n", nmemb, size);
     if (use_custom_alloc) {
         size_t total = nmemb * size;
         void *ptr = mws_malloc(total);
@@ -58,6 +69,7 @@ void* mws_calloc(size_t nmemb, size_t size) {
 }
 
 char* mws_strdup(const char *str) {
+    printf("Strdup %s\n", str);
     size_t len = strlen(str) + 1;
     char *copy = mws_malloc(len);
     if (copy) memcpy(copy, str, len);
