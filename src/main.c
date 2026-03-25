@@ -4,6 +4,99 @@
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
 #include <sqlite3.h>
+#include <stdbool.h>
+#include "mem_alloc.h"
+#define BUFFER_SIZE 1048576
+
+static char buffer[BUFFER_SIZE];
+
+static bool use_custom_alloc = false;
+
+void* mws_malloc(size_t size)
+{
+    return use_custom_alloc ? mem_alloc(size) : malloc(size);
+}
+
+void mws_free(void *ptr)
+{
+    if (use_custom_alloc)
+        mem_free(ptr);
+    else
+        free(ptr);
+}
+
+void* mws_realloc(void *ptr, size_t size)
+{
+    if (use_custom_alloc) {
+        if (!ptr) {
+            return mws_malloc(size);
+        }
+        if (size == 0) {
+            mem_free(ptr);
+            return NULL;
+        }
+        void *new_ptr = mws_malloc(size);
+        if (!new_ptr) {
+            return NULL;
+        }
+        mem_free(ptr);
+        return new_ptr;
+    } else {
+        return realloc(ptr, size);
+    }
+}
+
+void* mws_calloc(size_t nmemb, size_t size) {
+    if (use_custom_alloc) {
+        size_t total = nmemb * size;
+        void *ptr = mws_malloc(total);
+        if (ptr) memset(ptr, 0, total);
+        return ptr;
+    } else {
+        return calloc(nmemb, size);
+    }
+}
+
+char* mws_strdup(const char *str) {
+    size_t len = strlen(str) + 1;
+    char *copy = mws_malloc(len);
+    if (copy) memcpy(copy, str, len);
+    return copy;
+}
+
+static void* sqlite_malloc(int size)
+{
+    return mws_malloc(size);
+}
+
+void sqlite_free(void *ptr)
+{
+    mws_free(ptr);
+}
+
+void* sqlite_realloc(void *ptr, int size)
+{
+    return mws_realloc(ptr, size);
+}
+
+int sqlite_size(void *ptr)
+{
+    return 0;
+}
+
+int sqlite_roundup(int size)
+{
+    return size;
+}
+
+int sqlite_init(void *p)
+{
+    return 0;
+}
+
+void sqlite_shutdown(void *p)
+{
+}
 
 /*https://curl.se/libcurl/c/CURLOPT_WRITEFUNCTION.html*/
 typedef struct {
@@ -15,7 +108,7 @@ static size_t write_callback(void *clientp, size_t size, size_t nmemb, void *use
 {
     size_t realsize = nmemb;
     memory *mem = (memory *)userp;
-    char *ptr = realloc(mem->response, mem->size + realsize + 1);
+    char *ptr = mws_realloc(mem->response, mem->size + realsize + 1);
     if(!ptr)
         return 0;  /* out of memory */
     mem->response = ptr;
@@ -25,12 +118,21 @@ static size_t write_callback(void *clientp, size_t size, size_t nmemb, void *use
     return realsize;
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--custom-allocator") == 0) {
+            use_custom_alloc = true;
+        }
+    }
+    size_t buffersize = 1024 * 1024;
+    if (use_custom_alloc) {
+        mem_init(buffer, BUFFER_SIZE);
+    }
     CURL *curl;
     CURLcode res;
     memory chunk;
-    chunk.response = malloc(1);
+    chunk.response = mws_malloc(1);
     chunk.size = 0;
     const char *baseurl = "https://api.open-meteo.com/v1/forecast";
     double latitude = 42.3601;
@@ -39,7 +141,16 @@ int main(void)
     char url[256];
     snprintf(url, sizeof(url), "%s?latitude=%.4f&longitude=%.4f&%s",
              baseurl, latitude, longitude, params);
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    if (curl_global_init_mem(
+        CURL_GLOBAL_DEFAULT,
+        mws_malloc,
+        mws_free,
+        mws_realloc,
+        mws_strdup,
+        mws_calloc) != CURLE_OK) {
+            printf("curl allocator init failed\n");
+            return 1;
+    }
     curl = curl_easy_init();
     if(!curl) {
         fprintf(stderr, "Failed\n");
@@ -53,15 +164,20 @@ int main(void)
         fprintf(stderr, "Failed: %s\n",
                 curl_easy_strerror(res));
         curl_easy_cleanup(curl);
-        free(chunk.response);
+        mws_free(chunk.response);
         return 1;
     }
     printf("Raw JSON response:\n%s\n", chunk.response);
+    cJSON_Hooks hooks = {
+        .malloc_fn = mws_malloc,
+        .free_fn = mws_free
+    };
+    cJSON_InitHooks(&hooks);
     cJSON *json = cJSON_Parse(chunk.response);
     if(!json) {
         fprintf(stderr, "Failed\n");
         curl_easy_cleanup(curl);
-        free(chunk.response);
+        mws_free(chunk.response);
         return 1;
     }
     cJSON *current_weather = cJSON_GetObjectItemCaseSensitive(json, "current_weather");
@@ -82,6 +198,20 @@ int main(void)
             printf("Wind Direction: %.2f\n", winddir->valuedouble);
         if(weathercode && cJSON_IsNumber(weathercode))
             printf("Weather Code: %d\n", weathercode->valueint);
+        /*sqlite3_mem_methods methods = {
+            sqlite_malloc,
+            sqlite_free,
+            sqlite_realloc,
+            sqlite_size,
+            sqlite_roundup,
+            sqlite_init,
+            sqlite_shutdown,
+            NULL
+        };
+        if (sqlite3_config(SQLITE_CONFIG_MALLOC, &methods) != SQLITE_OK) {
+            printf("SQLite allocator setup failed\n");
+            return 1;
+        }*/
         sqlite3 *db;
         if (sqlite3_open("weather.db", &db)) {
             fprintf(stderr, "Can't open DB: %s\n", sqlite3_errmsg(db));
@@ -133,6 +263,6 @@ int main(void)
     cJSON_Delete(json);
     curl_easy_cleanup(curl);
     curl_global_cleanup();
-    free(chunk.response);
+    mws_free(chunk.response);
     return 0;
 }
